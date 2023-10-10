@@ -1,0 +1,70 @@
+name: Generate prebuilds for release
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  MODULE_NAME: "better-sqlite3"
+  NDK_VERSION: 24.0.8215888
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ["android-arm", "android-arm64", "android-x64"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup_ndk
+        with:
+          ndk-version: $NDK_VERSION
+
+      - name: Use Node.js 16
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      - name: npm install
+        run: npm ci
+
+      - name: Generate prebuild for ${{ matrix.target }}
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup_ndk.outputs.ndk-path }}
+        working-directory: ./node_modules/${{ env.MODULE_NAME }}
+        run: npx prebuild-for-nodejs-mobile ${{ matrix.target }}
+
+      - name: Upload prebuild artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          path: ./node_modules/${{ env.MODULE_NAME }}/prebuilds/${{ matrix.target }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./prebuilds
+
+      - name: tar + gzip prebuilds
+        run: tar -czf ${{ env.MODULE_NAME }}.${{ github.ref_name }}.tar.gz ./prebuilds/
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ${{ env.MODULE_NAME }}.${{ github.ref_name }}.tar.gz
+          artifactErrorsFailBuild: true
+          allowUpdates: true
