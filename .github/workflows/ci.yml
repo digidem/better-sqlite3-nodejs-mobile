@@ -6,7 +6,6 @@ on:
 
 env:
   MODULE_NAME: "better-sqlite3"
-  NDK_VERSION: 24.0.8215888
 
 jobs:
   build:
@@ -24,7 +23,8 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup_ndk
         with:
-          ndk-version: $NDK_VERSION
+          ndk-version: r24 # https://github.com/android/ndk/wiki/Unsupported-Downloads#r24
+          local-cache: true
 
       - name: Use Node.js 16
         uses: actions/setup-node@v3
