@@ -9,8 +9,8 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-20.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -21,10 +21,10 @@ jobs:
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
-        id: setup_ndk
+        id: setup-ndk
         with:
           ndk-version: r24 # https://github.com/android/ndk/wiki/Unsupported-Downloads#r24
-          local-cache: true
+          add-to-path: false
 
       - name: Use Node.js 16
         uses: actions/setup-node@v3
@@ -36,7 +36,7 @@ jobs:
 
       - name: Generate prebuild for ${{ matrix.target }}
         env:
-          ANDROID_NDK_HOME: ${{ steps.setup_ndk.outputs.ndk-path }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         working-directory: ./node_modules/${{ env.MODULE_NAME }}
         run: npx prebuild-for-nodejs-mobile ${{ matrix.target }}
 
