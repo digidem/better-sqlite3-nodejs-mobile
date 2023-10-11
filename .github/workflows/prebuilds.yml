@@ -48,11 +48,29 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: npx --yes prebuild-for-nodejs-mobile@1.2.1 ${{ matrix.target }}
 
-      - name: Upload prebuild artifacts
+      - name: Upload original prebuild artifacts # mostly for debugging purposes
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.target }}
           path: ./package/prebuilds/${{ matrix.target }}
+
+      # The below steps are needed for the release job
+
+      - name: Set NODE_ABI env var
+        run: echo "NODE_ABI=$(node -e 'console.log(process.versions.modules)')" >> "$GITHUB_ENV"
+
+      - name: Derive release artifact name
+        id: artifact-name
+        run: echo "NAME=${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-node-${{ env.NODE_ABI }}-${{ matrix.TARGET }}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release artifact
+        run: tar -czf ${{ steps.artifact-name.outputs.NAME }}.tar.gz --directory=./package/prebuilds/${{ matrix.TARGET }} .
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.artifact-name.outputs.NAME }}
+          path: ./${{ steps.artifact-name.outputs.NAME }}.tar.gz
 
   release:
     if: ${{ startsWith(github.ref, 'refs/tags') }}
@@ -64,15 +82,11 @@ jobs:
 
       - name: Download artifacts
         uses: actions/download-artifact@v3
-        with:
-          path: ./prebuilds
-
-      - name: tar + gzip prebuilds
-        run: tar -czf ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}.tar.gz ./prebuilds/
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}.tar.gz
+          artifacts: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-\*.tar.gz
           artifactErrorsFailBuild: true
           allowUpdates: true
+          replacesArtifacts: true
