@@ -14,7 +14,7 @@
 
 Should be clear enough to follow the workflow steps but in summary:
 
-1. Download the npm tarball package and unzip e.g. `npm pack better-sqlite@latest | xargs tar -zxvf
+1. Download the npm tarball package and unzip e.g. `npm pack better-sqlite@latest | xargs tar -zxvf`
 
 2. Navigate to unzipped directory and run `npx prebuild-for-nodejs-mobile TARGET`, where `TARGET` is an accepted value from the [`prebuild-for-nodejs-mobile`](https://github.com/staltz/prebuild-for-nodejs-mobile) CLI
    - if you don't have the `ANDROID_NDK_PATH` environment variable exported, you may run the command like so: `ANDROID_NDK_HOME=/path/to/ndk npx prebuild-for-nodejs-mobile TARGET`
