@@ -86,7 +86,7 @@ jobs:
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-\*.tar.gz
+          artifacts: "${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-*.tar.gz"
           artifactErrorsFailBuild: true
           allowUpdates: true
           replacesArtifacts: true
