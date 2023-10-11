@@ -37,6 +37,10 @@ jobs:
       - name: Download npm package and unpack
         run: npm pack ${{ env.MODULE_NAME }}@${{ env.MODULE_VERSION }} | xargs tar -zxvf
 
+      - name: Install deps for package
+        working-directory: ./package
+        run: npm ci
+
       - name: Generate prebuild for ${{ matrix.target }}
         working-directory: ./package
         env:
