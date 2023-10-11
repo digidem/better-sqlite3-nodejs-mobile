@@ -39,7 +39,7 @@ jobs:
 
       - name: Install deps for package
         working-directory: ./package
-        run: npm ci
+        run: npm install
 
       - name: Generate prebuild for ${{ matrix.target }}
         working-directory: ./package
