@@ -1,12 +1,14 @@
-name: Generate prebuilds for release
+name: Generate prebuilds
 
 on:
   push:
+    branches: [main]
     tags:
       - "*"
 
 env:
   MODULE_NAME: "better-sqlite3"
+  MODULE_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
 
 jobs:
   build:
@@ -32,22 +34,23 @@ jobs:
         with:
           node-version: 16
 
-      - name: npm install
-        run: npm ci
+      - name: Download npm package and unpack
+        run: npm pack ${{ env.MODULE_NAME }}@${{ env.MODULE_VERSION }} | xargs tar -zxvf
 
       - name: Generate prebuild for ${{ matrix.target }}
+        working-directory: ./package
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        working-directory: ./node_modules/${{ env.MODULE_NAME }}
-        run: npx prebuild-for-nodejs-mobile ${{ matrix.target }}
+        run: npx --yes prebuild-for-nodejs-mobile@1.2.1 ${{ matrix.target }}
 
       - name: Upload prebuild artifacts
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.target }}
-          path: ./node_modules/${{ env.MODULE_NAME }}/prebuilds/${{ matrix.target }}
+          path: ./package/prebuilds/${{ matrix.target }}
 
   release:
+    if: ${{ startsWith(github.ref, 'refs/tags') }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -60,11 +63,11 @@ jobs:
           path: ./prebuilds
 
       - name: tar + gzip prebuilds
-        run: tar -czf ${{ env.MODULE_NAME }}-${{ github.ref_name }}.tar.gz ./prebuilds/
+        run: tar -czf ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}.tar.gz ./prebuilds/
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ${{ env.MODULE_NAME }}-${{ github.ref_name }}.tar.gz
+          artifacts: ${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}.tar.gz
           artifactErrorsFailBuild: true
           allowUpdates: true

@@ -2,3 +2,5 @@
 
 node_modules
 nodejs-assets
+package
+*.tgz
