@@ -7,6 +7,7 @@ on:
       - "*"
 
 env:
+  NODE_VERSION: 16
   MODULE_NAME: "better-sqlite3"
   MODULE_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
 
@@ -29,10 +30,10 @@ jobs:
           ndk-version: r24 # https://github.com/android/ndk/wiki/Unsupported-Downloads#r24
           add-to-path: false
 
-      - name: Use Node.js 16
+      - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v3
         with:
-          node-version: 16
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Download npm package and unpack
         run: npm pack ${{ env.MODULE_NAME }}@${{ env.MODULE_VERSION }} | xargs tar -zxvf
