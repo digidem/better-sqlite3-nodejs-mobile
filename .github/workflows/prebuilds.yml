@@ -7,12 +7,13 @@ on:
       - "*"
 
 env:
-  NODE_VERSION: 16
+  NODE_VERSION: 18
   MODULE_NAME: "better-sqlite3"
   MODULE_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
 
 jobs:
   build:
+    if: ${{ github.env.MODULE_VERSION != '' }}
     runs-on: ubuntu-20.04
     timeout-minutes: 10
     strategy:
@@ -46,7 +47,7 @@ jobs:
         working-directory: ./package
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: npx --yes prebuild-for-nodejs-mobile@1.2.1 ${{ matrix.target }}
+        run: npx --yes prebuild-for-nodejs-mobile@18.17.7 ${{ matrix.target }} --verbose
 
       - name: Upload original prebuild artifacts # mostly for debugging purposes
         uses: actions/upload-artifact@v3
@@ -56,12 +57,10 @@ jobs:
 
       # The below steps are needed for the release job
 
-      - name: Set NODE_ABI env var
-        run: echo "NODE_ABI=$(node -e 'console.log(process.versions.modules)')" >> "$GITHUB_ENV"
-
       - name: Derive release artifact name
         id: artifact-name
-        run: echo "NAME=${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-node-${{ env.NODE_ABI }}-${{ matrix.TARGET }}" >> "$GITHUB_OUTPUT"
+        # Use the version associated with the runtime that comes with Nodejs Mobile (can see list here: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/doc/abi_version_registry.json)
+        run: echo "NAME=${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-node-108-${{ matrix.TARGET }}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release artifact
         run: tar -czf ${{ steps.artifact-name.outputs.NAME }}.tar.gz --directory=./package/prebuilds/${{ matrix.TARGET }} .
