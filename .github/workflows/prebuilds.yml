@@ -18,6 +18,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container: python:2.7.18-buster
     timeout-minutes: 10
     strategy:
       fail-fast: false
