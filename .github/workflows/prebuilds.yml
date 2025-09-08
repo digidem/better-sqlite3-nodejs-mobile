@@ -25,7 +25,7 @@ jobs:
         target: ["android-arm", "android-arm64", "android-x64"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -35,7 +35,7 @@ jobs:
           add-to-path: false
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -53,7 +53,7 @@ jobs:
         run: npx --yes prebuild-for-nodejs-mobile@18.17.7 ${{ matrix.target }} --verbose
 
       - name: Upload original prebuild artifacts # mostly for debugging purposes
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: ./package/prebuilds/${{ matrix.target }}
@@ -68,7 +68,7 @@ jobs:
         run: tar -czf ${{ steps.artifact-name.outputs.NAME }}.tar.gz --directory=./package/prebuilds/${{ matrix.TARGET }} .
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.NAME }}
           path: ./${{ steps.artifact-name.outputs.NAME }}.tar.gz
@@ -79,10 +79,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v5
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
