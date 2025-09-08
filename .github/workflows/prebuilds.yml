@@ -18,7 +18,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: python:2.7.18-buster
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -27,6 +26,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - uses: MatteoH2O1999/setup-python@v6
+        with:
+          python-version: '2.7.18'
+          cache-build: true
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
