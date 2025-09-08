@@ -31,7 +31,7 @@ jobs:
       - uses: MatteoH2O1999/setup-python@v6
         with:
           python-version: '2.7'
-
+          cache-build: true
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
