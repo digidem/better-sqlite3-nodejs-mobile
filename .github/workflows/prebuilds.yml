@@ -17,6 +17,10 @@ on:
         required: false
         default: true
         type: boolean
+      release_tag:
+        description: "Release tag"
+        required: false
+        type: string
 
 jobs:
   build:
@@ -116,4 +120,4 @@ jobs:
           artifactErrorsFailBuild: true
           allowUpdates: true
           replacesArtifacts: true
-          tag: ${{ needs.build.outputs.module_version }}
+          tag: ${{ inputs.release_tag || needs.build.outputs.module_version }}
