@@ -1,43 +1,37 @@
 name: Generate prebuilds
 
-on:
-  push:
-    branches: [main]
-    tags:
-      - "*"
-
 env:
-  NODE_VERSION: 18
-  # Needs to match to the corresponding Node version used by NodeJS Mobile
-  # NodeJS Mobile runtime version: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/src/node_mobile_version.h
-  # ABI mapping reference: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/doc/abi_version_registry.json
-  NODE_ABI: 108
+  NODE_VERSION: "20"
   MODULE_NAME: "better-sqlite3"
-  MODULE_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      module_version:
+        description: "Module version"
+        required: true
+        default: "11"
+        type: string
+      publish_release:
+        description: "Publish release"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
     strategy:
-      fail-fast: false
       matrix:
-        target: ["android-arm", "android-arm64", "android-x64"]
+        platform: [android]
+        arch: [arm64, x64, arm]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    name: better-sqlite3 (${{ matrix.platform }}-${{ matrix.arch }})
+    outputs:
+      module_version: ${{ steps.parse-module-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: MatteoH2O1999/setup-python@v6
-        with:
-          python-version: '2.7.18'
-          cache-build: true
-
-      - name: Setup NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r24 # https://github.com/android/ndk/wiki/Unsupported-Downloads#r24
-          add-to-path: false
+      - uses: actions/checkout@v4
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -45,54 +39,81 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Download npm package and unpack
-        run: npm pack ${{ env.MODULE_NAME }}@${{ env.MODULE_VERSION }} | xargs tar -zxvf
+        run:
+          npm pack ${{ env.MODULE_NAME }}@${{ inputs.module_version }} | xargs
+          tar -zxvf
+
+      - name: Parse module version
+        id: parse-module-version
+        working-directory: ./package
+        run: echo version=$(jq -r .version package.json) >> $GITHUB_OUTPUT
+
+      - run: npm install -g bare-make
 
       - name: Install deps for package
         working-directory: ./package
-        run: npm install
+        run: npm install --ignore-scripts
 
-      - name: Generate prebuild for ${{ matrix.target }}
+      - name: Install cmake build tools
         working-directory: ./package
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: npx --yes prebuild-for-nodejs-mobile@18.17.7 ${{ matrix.target }} --verbose
+        run: npm install -D --ignore-scripts cmake-bare cmake-fetch
+
+      - name: Install patched cmake-napi
+        working-directory: ./package
+        run:
+          npm install -D --ignore-scripts
+          cmake-napi@github:digidem/cmake-napi-nodejs-mobile
+
+      - name: Copy CMakeLists.txt
+        run: cp ./CMakeLists.txt ./package/
+
+      - name: Generate
+        working-directory: ./package
+        run:
+          bare-make generate --platform ${{ matrix.platform }} --arch
+          ${{matrix.arch }}
+
+      - name: Build
+        working-directory: ./package
+        run: bare-make build
+
+      - name: Install
+        working-directory: ./package
+        run: bare-make install
 
       - name: Upload original prebuild artifacts # mostly for debugging purposes
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: ./package/prebuilds/${{ matrix.target }}
-
-      # The below steps are needed for the release job
-
-      - name: Derive release artifact name
-        id: artifact-name
-        run: echo "NAME=${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-node-${{ env.NODE_ABI }}-${{ matrix.TARGET }}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare release artifact
-        run: tar -czf ${{ steps.artifact-name.outputs.NAME }}.tar.gz --directory=./package/prebuilds/${{ matrix.TARGET }} .
-
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.artifact-name.outputs.NAME }}
-          path: ./${{ steps.artifact-name.outputs.NAME }}.tar.gz
+          name:
+            ${{ env.MODULE_NAME }}-${{
+            steps.parse-module-version.outputs.version }}-${{
+            matrix.platform}}-${{ matrix.arch }}
+          path:
+            ./package/prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/*.node
 
   release:
-    if: ${{ startsWith(github.ref, 'refs/tags') }}
+    if: ${{ inputs.publish_release }}
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
+        with:
+          path: prebuilds
+
+      - run: |
+          mkdir -p artifacts
+          for folder in prebuilds/*/; do
+            folder_name=$(basename "$folder")
+            tar -czvf "artifacts/${folder_name}.tar.gz" -C "prebuilds/${folder_name}" .
+          done
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "${{ env.MODULE_NAME }}-${{ env.MODULE_VERSION }}-*/*.tar.gz"
+          artifacts: "artifacts/*"
           artifactErrorsFailBuild: true
           allowUpdates: true
           replacesArtifacts: true
+          tag: ${{ needs.build.outputs.module_version }}
