@@ -3,6 +3,10 @@ name: Generate prebuilds
 env:
   NODE_VERSION: "20"
   MODULE_NAME: "better-sqlite3"
+  # Needs to match to the corresponding Node version used by NodeJS Mobile
+  # NodeJS Mobile runtime version: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/src/node_mobile_version.h
+  # ABI mapping reference: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/doc/abi_version_registry.json
+  NODE_ABI: 108
 
 on:
   workflow_dispatch:
@@ -90,8 +94,8 @@ jobs:
         with:
           name:
             ${{ env.MODULE_NAME }}-${{
-            steps.parse-module-version.outputs.version }}-${{
-            matrix.platform}}-${{ matrix.arch }}
+            steps.parse-module-version.outputs.version }}-node-${{ env.NODE_ABI
+            }}-${{ matrix.platform}}-${{ matrix.arch }}
           path:
             ./package/prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/*.node
 
