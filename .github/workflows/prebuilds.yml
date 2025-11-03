@@ -91,6 +91,13 @@ jobs:
         working-directory: ./package
         run: bare-make install
 
+      - name: Rename
+        working-directory: ./package
+        # bare-make uses kebab-case for filenames, but better-sqlite3 expects snake_case for the .node file
+        run: |
+          mv ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better-sqlite3.node \
+          ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better_sqlite3.node
+
       - name: Upload original prebuild artifacts # mostly for debugging purposes
         uses: actions/upload-artifact@v4
         with:
