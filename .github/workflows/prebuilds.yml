@@ -21,9 +21,10 @@ on:
         required: false
         default: true
         type: boolean
-      release_tag:
-        description: "Release tag"
+      release_tag_suffix:
+        description: "Release tag suffix"
         required: false
+        default: "-bare-make"
         type: string
 
 jobs:
@@ -68,8 +69,7 @@ jobs:
 
       - name: Install patched cmake-napi
         working-directory: ./package
-        run:
-          npm install -D --ignore-scripts
+        run: npm install -D --ignore-scripts
           cmake-napi@github:digidem/cmake-napi-nodejs-mobile
 
       - name: Copy CMakeLists.txt
@@ -77,9 +77,11 @@ jobs:
 
       - name: Generate
         working-directory: ./package
-        run:
-          bare-make generate --platform ${{ matrix.platform }} --arch
-          ${{matrix.arch }}
+        run: |
+          bare-make generate \
+          --platform ${{ matrix.platform }} \
+          --arch ${{matrix.arch }} \
+          -D CMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384"
 
       - name: Build
         working-directory: ./package
@@ -89,15 +91,20 @@ jobs:
         working-directory: ./package
         run: bare-make install
 
+      - name: Rename
+        working-directory: ./package
+        # bare-make uses kebab-case for filenames, but better-sqlite3 expects snake_case for the .node file
+        run: |
+          mv ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better-sqlite3.node \
+          ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better_sqlite3.node
+
       - name: Upload original prebuild artifacts # mostly for debugging purposes
         uses: actions/upload-artifact@v4
         with:
-          name:
-            ${{ env.MODULE_NAME }}-${{
+          name: ${{ env.MODULE_NAME }}-${{
             steps.parse-module-version.outputs.version }}-node-${{ env.NODE_ABI
             }}-${{ matrix.platform}}-${{ matrix.arch }}
-          path:
-            ./package/prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/*.node
+          path: ./package/prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/*.node
 
   release:
     if: ${{ inputs.publish_release }}
@@ -124,4 +131,4 @@ jobs:
           artifactErrorsFailBuild: true
           allowUpdates: true
           replacesArtifacts: true
-          tag: ${{ inputs.release_tag || needs.build.outputs.module_version }}
+          tag: ${{ needs.build.outputs.module_version }}${{ inputs.release_tag_suffix }}
