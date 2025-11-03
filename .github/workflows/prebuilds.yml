@@ -21,9 +21,10 @@ on:
         required: false
         default: true
         type: boolean
-      release_tag:
-        description: "Release tag"
+      release_tag_suffix:
+        description: "Release tag suffix"
         required: false
+        default: "-bare-make"
         type: string
 
 jobs:
@@ -123,4 +124,4 @@ jobs:
           artifactErrorsFailBuild: true
           allowUpdates: true
           replacesArtifacts: true
-          tag: ${{ inputs.release_tag || needs.build.outputs.module_version }}
+          tag: ${{ needs.build.outputs.module_version }}${{ inputs.release_tag_suffix }}
