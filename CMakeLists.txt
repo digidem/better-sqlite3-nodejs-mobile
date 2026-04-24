@@ -157,17 +157,22 @@ if(target MATCHES "linux")
   )
 endif()
 
-# Test extension (optional)
-add_library(test_extension SHARED)
+# Test extension (optional). Not built on iOS: iOS restricts standalone
+# shared libraries (code signing / framework packaging), and nothing in
+# the main module depends on it — it exists for better-sqlite3's own
+# runtime-loadable-extension test, which we don't run.
+if(NOT target MATCHES "^ios")
+  add_library(test_extension SHARED)
 
-target_sources(
-  test_extension
-  PRIVATE
-    deps/test_extension.c
-)
+  target_sources(
+    test_extension
+    PRIVATE
+      deps/test_extension.c
+  )
 
-target_link_libraries(
-  test_extension
-  PRIVATE
-    sqlite3
-)
+  target_link_libraries(
+    test_extension
+    PRIVATE
+      sqlite3
+  )
+endif()

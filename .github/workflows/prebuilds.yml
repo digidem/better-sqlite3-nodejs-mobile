@@ -1,12 +1,15 @@
 name: Generate prebuilds
 
+# This workflow is a custom variant of
+# digidem/nodejs-mobile-bare-prebuilds' reusable `prebuild` action. The
+# reusable action can't be used directly because better-sqlite3 ships no
+# CMakeLists.txt — we inject a custom one from this repo — and the
+# built .node file has to be renamed from kebab-case to snake_case for
+# better-sqlite3's bindings loader. The release step does use the
+# reusable release.yml workflow as-is.
+
 env:
-  NODE_VERSION: "20"
   MODULE_NAME: "better-sqlite3"
-  # Needs to match to the corresponding Node version used by NodeJS Mobile
-  # NodeJS Mobile runtime version: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/src/node_mobile_version.h
-  # ABI mapping reference: https://github.com/nodejs-mobile/nodejs-mobile/blob/main/doc/abi_version_registry.json
-  NODE_ABI: 108
 
 on:
   workflow_dispatch:
@@ -21,31 +24,48 @@ on:
         required: false
         default: true
         type: boolean
-      release_tag_suffix:
-        description: "Release tag suffix"
-        required: false
-        default: "-bare-make"
-        type: string
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        platform: [android]
-        arch: [arm64, x64, arm]
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    name: better-sqlite3 (${{ matrix.platform }}-${{ matrix.arch }})
+        include:
+          - platform: android
+            arch: arm64
+          - platform: android
+            arch: x64
+          - platform: android
+            arch: arm
+          - platform: ios
+            arch: arm64
+          - platform: ios
+            arch: arm64
+            simulator: true
+          - platform: ios
+            arch: x64
+            simulator: true
+    runs-on: ${{ matrix.platform == 'ios' && 'macos-latest' || 'ubuntu-22.04' }}
+    timeout-minutes: 20
+    name: better-sqlite3 (${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.simulator && '-simulator' || '' }})
     outputs:
       module_version: ${{ steps.parse-module-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+      - name: Compute target
+        id: target
+        run: |
+          suffix=""
+          if [ "${{ matrix.simulator }}" = "true" ]; then
+            suffix="-simulator"
+          fi
+          echo "target=${{ matrix.platform }}-${{ matrix.arch }}${suffix}" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 24
 
       - name: Download npm package and unpack
         run:
@@ -56,6 +76,9 @@ jobs:
         id: parse-module-version
         working-directory: ./package
         run: echo version=$(jq -r .version package.json) >> $GITHUB_OUTPUT
+
+      - name: Copy custom CMakeLists.txt
+        run: cp ./CMakeLists.txt ./package/
 
       - run: npm install -g bare-make
 
@@ -72,16 +95,20 @@ jobs:
         run: npm install -D --ignore-scripts
           cmake-napi@github:digidem/cmake-napi-nodejs-mobile
 
-      - name: Copy CMakeLists.txt
-        run: cp ./CMakeLists.txt ./package/
-
       - name: Generate
         working-directory: ./package
         run: |
+          extra_args=()
+          if [ "${{ matrix.platform }}" = "android" ]; then
+            extra_args+=(-D CMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384")
+          fi
+          if [ "${{ matrix.simulator }}" = "true" ]; then
+            extra_args+=(--simulator)
+          fi
           bare-make generate \
-          --platform ${{ matrix.platform }} \
-          --arch ${{matrix.arch }} \
-          -D CMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384"
+            --platform ${{ matrix.platform }} \
+            --arch ${{ matrix.arch }} \
+            "${extra_args[@]}"
 
       - name: Build
         working-directory: ./package
@@ -95,40 +122,41 @@ jobs:
         working-directory: ./package
         # bare-make uses kebab-case for filenames, but better-sqlite3 expects snake_case for the .node file
         run: |
-          mv ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better-sqlite3.node \
-          ./prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/better_sqlite3.node
+          mv ./prebuilds/${{ steps.target.outputs.target }}/better-sqlite3.node \
+          ./prebuilds/${{ steps.target.outputs.target }}/better_sqlite3.node
 
-      - name: Upload original prebuild artifacts # mostly for debugging purposes
-        uses: actions/upload-artifact@v4
+      - name: Upload prebuild artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.MODULE_NAME }}-${{
-            steps.parse-module-version.outputs.version }}-node-${{ env.NODE_ABI
-            }}-${{ matrix.platform}}-${{ matrix.arch }}
-          path: ./package/prebuilds/${{ matrix.platform }}-${{ matrix.arch }}/*.node
+            steps.parse-module-version.outputs.version }}-${{
+            steps.target.outputs.target }}
+          path: ./package/prebuilds/${{ steps.target.outputs.target }}/*.node
+
+  test-android:
+    needs: build
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-android.yml@v2
+    with:
+      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
+      # The default 'smoke' runner (just `require(module)`) doesn't exercise
+      # better-sqlite3's native binding — it's loaded lazily inside the
+      # Database constructor. See test/smoke.js for details.
+      test_runner: custom
+      test_script: test/smoke.js
+
+  test-ios:
+    needs: build
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-ios.yml@v2
+    with:
+      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
+      test_runner: custom
+      test_script: test/smoke.js
 
   release:
     if: ${{ inputs.publish_release }}
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: prebuilds
-
-      - run: |
-          mkdir -p artifacts
-          for folder in prebuilds/*/; do
-            folder_name=$(basename "$folder")
-            tar -czvf "artifacts/${folder_name}.tar.gz" -C "prebuilds/${folder_name}" .
-          done
-
-      - name: Create GitHub Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "artifacts/*"
-          artifactErrorsFailBuild: true
-          allowUpdates: true
-          replacesArtifacts: true
-          tag: ${{ needs.build.outputs.module_version }}${{ inputs.release_tag_suffix }}
+    needs: [build, test-android, test-ios]
+    permissions:
+      contents: write
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/release.yml@v2
+    with:
+      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
