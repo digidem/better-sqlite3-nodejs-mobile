@@ -10,6 +10,11 @@ name: Generate prebuilds
 
 env:
   MODULE_NAME: "better-sqlite3"
+  # Node.js version embedded in nodejs-mobile. The corresponding NODE_MODULE_VERSION
+  # (ABI) is resolved from https://nodejs.org/dist/index.json in the `resolve`
+  # job and embedded in artifact / release-asset names.
+  # https://github.com/nodejs-mobile/nodejs-mobile/blob/main/src/node_mobile_version.h
+  NODE_VERSION: "18.20.4"
 
 on:
   workflow_dispatch:
@@ -26,7 +31,35 @@ on:
         type: boolean
 
 jobs:
+  resolve:
+    runs-on: ubuntu-slim
+    outputs:
+      node_abi: ${{ steps.abi.outputs.node_abi }}
+    steps:
+      - name: Cache resolved Node ABI
+        id: cache
+        uses: actions/cache@v5
+        with:
+          path: .node-abi
+          key: node-abi-${{ env.NODE_VERSION }}
+
+      - name: Resolve Node ABI from nodejs.org
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          abi=$(curl -fsSL https://nodejs.org/dist/index.json \
+            | jq -r --arg v "v${NODE_VERSION}" '.[] | select(.version==$v) | .modules')
+          if [ -z "$abi" ] || [ "$abi" = "null" ]; then
+            echo "::error::Could not resolve ABI for Node v${NODE_VERSION} from https://nodejs.org/dist/index.json"
+            exit 1
+          fi
+          echo "$abi" > .node-abi
+
+      - id: abi
+        run: echo "node_abi=$(cat .node-abi)" >> $GITHUB_OUTPUT
+
   build:
+    needs: resolve
     strategy:
       fail-fast: false
       matrix:
@@ -47,7 +80,8 @@ jobs:
             simulator: true
     runs-on: ${{ matrix.platform == 'ios' && 'macos-latest' || 'ubuntu-22.04' }}
     timeout-minutes: 20
-    name: better-sqlite3 (${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.simulator && '-simulator' || '' }})
+    name: better-sqlite3 (${{ matrix.platform }}-${{ matrix.arch }}${{
+      matrix.simulator && '-simulator' || '' }})
     outputs:
       module_version: ${{ steps.parse-module-version.outputs.version }}
 
@@ -68,9 +102,8 @@ jobs:
           node-version: 24
 
       - name: Download npm package and unpack
-        run:
-          npm pack ${{ env.MODULE_NAME }}@${{ inputs.module_version }} | xargs
-          tar -zxvf
+        run: npm pack ${{ env.MODULE_NAME }}@${{ inputs.module_version }} | xargs tar
+          -zxvf
 
       - name: Parse module version
         id: parse-module-version
@@ -128,13 +161,13 @@ jobs:
       - name: Upload prebuild artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.MODULE_NAME }}-${{
-            steps.parse-module-version.outputs.version }}-${{
+          name: ${{ env.MODULE_NAME }}-${{ steps.parse-module-version.outputs.version
+            }}-node-${{ needs.resolve.outputs.node_abi }}-${{
             steps.target.outputs.target }}
           path: ./package/prebuilds/${{ steps.target.outputs.target }}/*.node
 
   test-android:
-    needs: build
+    needs: [ resolve, build ]
     uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-android.yml@v2
     with:
       module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
@@ -143,18 +176,26 @@ jobs:
       # Database constructor. See test/smoke.js for details.
       test_runner: custom
       test_script: test/smoke.js
+      # Override default artifact name (which assumes <module>-<version>-<target>)
+      # because we embed the node ABI; default target for android tests is android-x64.
+      artifact_name: better-sqlite3-${{ needs.build.outputs.module_version }}-node-${{
+        needs.resolve.outputs.node_abi }}-android-x64
 
   test-ios:
-    needs: build
+    needs: [ resolve, build ]
     uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-ios.yml@v2
     with:
       module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
       test_runner: custom
       test_script: test/smoke.js
+      # Default test-ios target is ios-arm64 (runtime install path) but the
+      # artifact comes from the ios-arm64-simulator build.
+      artifact_name: better-sqlite3-${{ needs.build.outputs.module_version }}-node-${{
+        needs.resolve.outputs.node_abi }}-ios-arm64-simulator
 
   release:
     if: ${{ inputs.publish_release }}
-    needs: [build, test-android, test-ios]
+    needs: [ build, test-android, test-ios ]
     permissions:
       contents: write
     uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/release.yml@v2
