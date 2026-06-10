@@ -134,6 +134,13 @@ jobs:
           extra_args=()
           if [ "${{ matrix.platform }}" = "android" ]; then
             extra_args+=(-D CMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384")
+            # RELR packed relocations (emitted by default when targeting
+            # API >= 28 on recent NDKs; the bare-make toolchain defaults to
+            # android-29) SIGSEGV on Android < 9 — the older linker skips
+            # the unknown DT_ANDROID_RELR entries. Pin to nodejs-mobile's
+            # support floor instead. Mirrors
+            # digidem/nodejs-mobile-bare-prebuilds#9.
+            extra_args+=(-D ANDROID_PLATFORM=android-24)
           fi
           if [ "${{ matrix.simulator }}" = "true" ]; then
             extra_args+=(--simulator)
