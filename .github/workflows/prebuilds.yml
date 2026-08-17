@@ -47,17 +47,48 @@ jobs:
       versions: ${{ steps.abi.outputs.versions }}
       # JSON {version: ABI} map, e.g. {"18.20.4":"108","24.19.0-0":"137"} —
       # looked up per matrix leg to embed the right ABI in artifact names.
+      # Empty when the module is N-API.
       abis: ${{ steps.abi.outputs.abis }}
+      # Exact module version resolved from the dispatch input.
+      module_version: ${{ steps.abi.outputs.module_version }}
+      # "true" when the module builds against N-API rather than raw V8.
+      napi: ${{ steps.abi.outputs.napi }}
     steps:
       - name: Resolve Node ABIs from nodejs.org
         id: abi
         run: |
           set -euo pipefail
+
+          # better-sqlite3 >= 13 is an N-API addon, so one binary serves every
+          # Node version and the ABI drops out of the asset name entirely.
+          # Detect it from the dependency rather than a version check, so this
+          # keeps working if the module switches back or a sibling adopts it.
+          # `--json` because a range input (e.g. "13") makes npm print one line
+          # per matching version; take the highest. An exact version yields a
+          # bare string, which is why a range is the case that breaks.
+          module_version=$(npm view "${MODULE_NAME}@${{ inputs.module_version }}" version --json \
+            | jq -r 'if type == "array" then .[-1] else . end')
+          addon_api=$(npm view "${MODULE_NAME}@${module_version}" dependencies --json \
+            | jq -r '."node-addon-api" // empty')
+          if [ -n "$addon_api" ]; then napi=true; else napi=false; fi
+          echo "module_version=${module_version}" >> "$GITHUB_OUTPUT"
+          echo "napi=${napi}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${MODULE_NAME}@${module_version} (napi=${napi})"
+
+          # An N-API build is ABI-independent, so build it once against the
+          # newest runtime rather than once per Node version. N-API 10 (what
+          # 13.x targets) also isn't available on the 18.x line at all.
+          node_versions="${NODE_VERSIONS}"
+          if [ "$napi" = "true" ]; then
+            node_versions=$(echo "${NODE_VERSIONS}" | tr ' ' '\n' | tail -1)
+            echo "N-API module — building once against ${node_versions}"
+          fi
+
           index=$(curl -fsSL https://nodejs.org/dist/index.json)
           abis="{}"
           versions="[]"
           include="[]"
-          for v in ${NODE_VERSIONS}; do
+          for v in ${node_versions}; do
             # Strip the nodejs-mobile revision suffix (`24.19.0-0` → `24.19.0`);
             # a no-op for the unsuffixed 18.x line.
             node_version="${v%-*}"
@@ -83,15 +114,24 @@ jobs:
               targets=$(jq -c '. + [{"platform":"ios","arch":"x64","simulator":true}]' <<<"$targets")
             fi
 
+            # `-node-<abi>-` only for raw-V8 addons, where the binary really is
+            # ABI-locked. N-API assets are named `<module>-<version>-<target>`.
+            if [ "$napi" = "true" ]; then abi_infix=""; else abi_infix="-node-${abi}"; fi
+
             include=$(jq -c \
               --arg node_version "$v" \
               --arg abi "$abi" \
+              --arg module "$MODULE_NAME" \
+              --arg module_version "$module_version" \
+              --arg abi_infix "$abi_infix" \
               --argjson targets "$targets" \
               '. + [$targets[] | . + {
                  node_version: $node_version,
                  abi: $abi,
                  target: ("\(.platform)-\(.arch)" + (if .simulator then "-simulator" else "" end)),
                  runs_on: (if .platform == "ios" then "macos-latest" else "ubuntu-22.04" end)
+               } | . + {
+                 artifact: "\($module)-\($module_version)\($abi_infix)-\(.target)"
                }]' <<<"$include")
           done
           echo "abis=${abis}" >> "$GITHUB_OUTPUT"
@@ -185,8 +225,7 @@ jobs:
       - name: Upload prebuild artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.MODULE_NAME }}-${{ steps.parse-module-version.outputs.version
-            }}-node-${{ matrix.abi }}-${{ matrix.target }}
+          name: ${{ matrix.artifact }}
           path: ./package/prebuilds/${{ matrix.target }}/*.node
 
   test-android:
@@ -207,8 +246,10 @@ jobs:
       nodejs_mobile_version: v${{ matrix.node_version }}
       # Override default artifact name (which assumes <module>-<version>-<target>)
       # because we embed the node ABI; default target for android tests is android-x64.
-      artifact_name: better-sqlite3-${{ needs.build.outputs.module_version }}-node-${{
-        fromJSON(needs.resolve.outputs.abis)[matrix.node_version] }}-android-x64
+      artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
+        needs.resolve.outputs.napi == 'true' && '' ||
+        format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
+        }}-android-x64
 
   test-ios:
     needs: [ resolve, build ]
@@ -224,8 +265,10 @@ jobs:
       nodejs_mobile_version: v${{ matrix.node_version }}
       # Default test-ios target is ios-arm64 (runtime install path) but the
       # artifact comes from the ios-arm64-simulator build.
-      artifact_name: better-sqlite3-${{ needs.build.outputs.module_version }}-node-${{
-        fromJSON(needs.resolve.outputs.abis)[matrix.node_version] }}-ios-arm64-simulator
+      artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
+        needs.resolve.outputs.napi == 'true' && '' ||
+        format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
+        }}-ios-arm64-simulator
 
   release:
     if: ${{ inputs.publish_release }}
