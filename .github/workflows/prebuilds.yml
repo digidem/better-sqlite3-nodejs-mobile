@@ -27,7 +27,7 @@ on:
       module_version:
         description: "Module version"
         required: true
-        default: "11"
+        default: "12"
         type: string
       publish_release:
         description: "Publish release"
