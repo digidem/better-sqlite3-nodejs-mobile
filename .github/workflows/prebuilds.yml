@@ -246,10 +246,13 @@ jobs:
       nodejs_mobile_version: v${{ matrix.node_version }}
       # Override default artifact name (which assumes <module>-<version>-<target>)
       # because we embed the node ABI; default target for android tests is android-x64.
+      # Inverted deliberately: in GitHub's `a && b || c`, an empty-string `b`
+      # is falsy and falls through to `c`, so the non-empty branch has to be
+      # the one guarded by the condition.
       artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
-        needs.resolve.outputs.napi == 'true' && '' ||
+        needs.resolve.outputs.napi != 'true' &&
         format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
-        }}-android-x64
+        || '' }}-android-x64
 
   test-ios:
     needs: [ resolve, build ]
@@ -265,10 +268,13 @@ jobs:
       nodejs_mobile_version: v${{ matrix.node_version }}
       # Default test-ios target is ios-arm64 (runtime install path) but the
       # artifact comes from the ios-arm64-simulator build.
+      # Inverted deliberately: in GitHub's `a && b || c`, an empty-string `b`
+      # is falsy and falls through to `c`, so the non-empty branch has to be
+      # the one guarded by the condition.
       artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
-        needs.resolve.outputs.napi == 'true' && '' ||
+        needs.resolve.outputs.napi != 'true' &&
         format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
-        }}-ios-arm64-simulator
+        || '' }}-ios-arm64-simulator
 
   release:
     if: ${{ inputs.publish_release }}
