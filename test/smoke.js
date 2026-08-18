@@ -18,6 +18,11 @@ const target = process.platform + '-' + process.arch
 const bindingPath = path.join(moduleRoot, 'prebuilds', target, 'better_sqlite3.node')
 
 console.log('TAP version 13')
+console.log(
+  '# runtime: ' + process.version +
+  ' mobile=' + (process.versions.mobile ?? 'n/a') +
+  ' abi=' + process.versions.modules
+)
 console.log('1..1')
 
 try {
