@@ -19,8 +19,8 @@ stay available in this repository's existing releases (11.10.0, 12.9.0,
 12.10.0), and the last revision that could build them is tagged
 [`legacy-nodejs-mobile-v18`](https://github.com/digidem/better-sqlite3-nodejs-mobile/tree/legacy-nodejs-mobile-v18).
 
-See [BENCHMARKS-node24.md](BENCHMARKS-node24.md) for how the two runtimes and
-the two better-sqlite3 lines compare.
+Benchmarks comparing the two runtimes and the two better-sqlite3 lines live in
+[better-sqlite3-nodejs-mobile-benchmarks](https://github.com/digidem/better-sqlite3-nodejs-mobile-benchmarks).
 
 ## Working locally
 
