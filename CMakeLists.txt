@@ -138,11 +138,9 @@ target_compile_options(
     -std=c++20
 )
 
-# better-sqlite3 >= 13 is an N-API/node-addon-api addon; 12.x and earlier are
-# raw V8. Detect which by whether the package pulls node-addon-api, so one
-# CMakeLists serves both lines. The three defines mirror what 13.x's
-# binding.gyp passes. `-flto` from binding.gyp is deliberately not copied —
-# the 12.x builds don't use it either, so the two stay comparable.
+# The three defines below mirror what better-sqlite3 13.x's binding.gyp passes.
+# `-flto` from binding.gyp is deliberately not copied, to keep these builds
+# comparable with the pre-13 ones that never used it.
 execute_process(
   COMMAND node -p "try{require('node-addon-api').include_dir}catch(e){''}"
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -150,25 +148,31 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-if(NODE_ADDON_API_DIR)
-  message("node-addon-api: ${NODE_ADDON_API_DIR}")
-
-  target_include_directories(
-    ${better_sqlite3_node}
-    PRIVATE
-      "${NODE_ADDON_API_DIR}"
-  )
-
-  # N-API 10 is the floor 13.x targets. nodejs-mobile v18 tops out at 9, so
-  # these builds are v24-and-later only.
-  target_compile_definitions(
-    ${better_sqlite3_node}
-    PRIVATE
-      NAPI_VERSION=10
-      NAPI_DISABLE_CPP_EXCEPTIONS
-      NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS
+if(NOT NODE_ADDON_API_DIR)
+  message(FATAL_ERROR
+    "node-addon-api not found. This CMakeLists only builds better-sqlite3 >= 13 "
+    "(N-API); 12.x and earlier are raw V8 addons and need the nodejs-mobile v18 "
+    "line — check out the legacy-nodejs-mobile-v18 tag to build those."
   )
 endif()
+
+message("node-addon-api: ${NODE_ADDON_API_DIR}")
+
+target_include_directories(
+  ${better_sqlite3_node}
+  PRIVATE
+    "${NODE_ADDON_API_DIR}"
+)
+
+# N-API 10 is the floor 13.x targets. nodejs-mobile v18 tops out at 9, so
+# these builds are v24-and-later only.
+target_compile_definitions(
+  ${better_sqlite3_node}
+  PRIVATE
+    NAPI_VERSION=10
+    NAPI_DISABLE_CPP_EXCEPTIONS
+    NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS
+)
 
 # Fix Android NDK C++ standard library include path
 if(ANDROID)

@@ -10,16 +10,11 @@ name: Generate prebuilds
 
 env:
   MODULE_NAME: "better-sqlite3"
-  # Space-separated nodejs-mobile releases to build prebuilds for, named as
-  # they are tagged but without the leading `v`. The 24.x line carries a
-  # `-<mobile-rev>` suffix that upstream Node doesn't know about; the ABI
-  # lookup against https://nodejs.org/dist/index.json strips it.
-  #
-  # The `resolve` job expands this into the build matrix — the version is
-  # passed to the build via `-D NAPI_NODE_VERSION` and its ABI is embedded in
-  # artifact / release-asset names, since better-sqlite3 is a raw V8 addon and
-  # therefore ABI-locked.
-  NODE_VERSIONS: "18.20.4 24.19.0-0"
+  # The nodejs-mobile release to build against, named as it is tagged but
+  # without the leading `v`. Passed to the build via `-D NAPI_NODE_VERSION`.
+  # better-sqlite3 >= 13 is an N-API addon, so one binary per target serves
+  # every runtime and the Node ABI never appears in an asset name.
+  NODE_VERSION: "24.19.0-0"
 
 on:
   workflow_dispatch:
@@ -27,7 +22,7 @@ on:
       module_version:
         description: "Module version"
         required: true
-        default: "12"
+        default: "13"
         type: string
       publish_release:
         description: "Publish release"
@@ -39,30 +34,17 @@ jobs:
   resolve:
     runs-on: ubuntu-slim
     outputs:
-      # `{"include":[...]}` — one leg per (nodejs-mobile release × target),
-      # ready to drop into the build job's `strategy.matrix`.
-      build_matrix: ${{ steps.abi.outputs.build_matrix }}
-      # JSON array of the NODE_VERSIONS, e.g. ["18.20.4","24.19.0-0"] — drives
-      # the test matrices.
-      versions: ${{ steps.abi.outputs.versions }}
-      # JSON {version: ABI} map, e.g. {"18.20.4":"108","24.19.0-0":"137"} —
-      # looked up per matrix leg to embed the right ABI in artifact names.
-      # Empty when the module is N-API.
-      abis: ${{ steps.abi.outputs.abis }}
       # Exact module version resolved from the dispatch input.
-      module_version: ${{ steps.abi.outputs.module_version }}
-      # "true" when the module builds against N-API rather than raw V8.
-      napi: ${{ steps.abi.outputs.napi }}
+      module_version: ${{ steps.resolve.outputs.module_version }}
+      # NODE_VERSION, re-exported so the reusable test workflows can be pinned
+      # to it — `env` isn't in scope in a `with:` block.
+      node_version: ${{ steps.resolve.outputs.node_version }}
     steps:
-      - name: Resolve Node ABIs from nodejs.org
-        id: abi
+      - name: Resolve module version
+        id: resolve
         run: |
           set -euo pipefail
 
-          # better-sqlite3 >= 13 is an N-API addon, so one binary serves every
-          # Node version and the ABI drops out of the asset name entirely.
-          # Detect it from the dependency rather than a version check, so this
-          # keeps working if the module switches back or a sibling adopts it.
           # `--json` because a range input (e.g. "13") makes npm print one line
           # per matching version; take the highest. An exact version yields a
           # bare string, which is why a range is the case that breaks.
@@ -70,84 +52,32 @@ jobs:
             | jq -r 'if type == "array" then .[-1] else . end')
           addon_api=$(npm view "${MODULE_NAME}@${module_version}" dependencies --json \
             | jq -r '."node-addon-api" // empty')
-          if [ -n "$addon_api" ]; then napi=true; else napi=false; fi
-          echo "module_version=${module_version}" >> "$GITHUB_OUTPUT"
-          echo "napi=${napi}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${MODULE_NAME}@${module_version} (napi=${napi})"
-
-          # An N-API build is ABI-independent, so build it once against the
-          # newest runtime rather than once per Node version. N-API 10 (what
-          # 13.x targets) also isn't available on the 18.x line at all.
-          node_versions="${NODE_VERSIONS}"
-          if [ "$napi" = "true" ]; then
-            node_versions=$(echo "${NODE_VERSIONS}" | tr ' ' '\n' | tail -1)
-            echo "N-API module — building once against ${node_versions}"
+          # Detect N-API from the dependency rather than a version check, so
+          # this keeps working if a sibling module adopts N-API later.
+          if [ -z "$addon_api" ]; then
+            echo "::error::${MODULE_NAME}@${module_version} does not depend on node-addon-api. better-sqlite3 < 13 uses raw V8 bindings and needs the nodejs-mobile v18 line, which this workflow no longer builds — check out the legacy-nodejs-mobile-v18 tag to rebuild it, or use the already-published 11.x / 12.x releases."
+            exit 1
           fi
-
-          index=$(curl -fsSL https://nodejs.org/dist/index.json)
-          abis="{}"
-          versions="[]"
-          include="[]"
-          for v in ${node_versions}; do
-            # Strip the nodejs-mobile revision suffix (`24.19.0-0` → `24.19.0`);
-            # a no-op for the unsuffixed 18.x line.
-            node_version="${v%-*}"
-            abi=$(jq -r --arg v "v${node_version}" '.[] | select(.version==$v) | .modules' <<<"$index")
-            if [ -z "$abi" ] || [ "$abi" = "null" ]; then
-              echo "::error::Could not resolve ABI for Node v${node_version} from https://nodejs.org/dist/index.json"
-              exit 1
-            fi
-            abis=$(jq -c --arg k "$v" --arg val "$abi" '. + {($k): $val}' <<<"$abis")
-            versions=$(jq -c --arg k "$v" '. + [$k]' <<<"$versions")
-
-            targets='[
-              {"platform":"android","arch":"arm64"},
-              {"platform":"android","arch":"x64"},
-              {"platform":"android","arch":"arm"},
-              {"platform":"ios","arch":"arm64"},
-              {"platform":"ios","arch":"arm64","simulator":true}
-            ]'
-            # NodeMobile.xcframework dropped its x86_64 simulator slice on the
-            # 24.x line, so there is nothing for an x64-simulator build to link
-            # against. Only the unsuffixed 18.x line still ships the fat slice.
-            if [ "$v" = "$node_version" ]; then
-              targets=$(jq -c '. + [{"platform":"ios","arch":"x64","simulator":true}]' <<<"$targets")
-            fi
-
-            # `-node-<abi>-` only for raw-V8 addons, where the binary really is
-            # ABI-locked. N-API assets are named `<module>-<version>-<target>`.
-            if [ "$napi" = "true" ]; then abi_infix=""; else abi_infix="-node-${abi}"; fi
-
-            include=$(jq -c \
-              --arg node_version "$v" \
-              --arg abi "$abi" \
-              --arg module "$MODULE_NAME" \
-              --arg module_version "$module_version" \
-              --arg abi_infix "$abi_infix" \
-              --argjson targets "$targets" \
-              '. + [$targets[] | . + {
-                 node_version: $node_version,
-                 abi: $abi,
-                 target: ("\(.platform)-\(.arch)" + (if .simulator then "-simulator" else "" end)),
-                 runs_on: (if .platform == "ios" then "macos-latest" else "ubuntu-22.04" end)
-               } | . + {
-                 artifact: "\($module)-\($module_version)\($abi_infix)-\(.target)"
-               }]' <<<"$include")
-          done
-          echo "abis=${abis}" >> "$GITHUB_OUTPUT"
-          echo "versions=${versions}" >> "$GITHUB_OUTPUT"
-          echo "build_matrix=$(jq -c '{include: .}' <<<"$include")" >> "$GITHUB_OUTPUT"
+          echo "module_version=${module_version}" >> "$GITHUB_OUTPUT"
+          echo "node_version=${NODE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${MODULE_NAME}@${module_version} against nodejs-mobile v${NODE_VERSION}"
 
   build:
     needs: resolve
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.resolve.outputs.build_matrix) }}
+      matrix:
+        include:
+          - { platform: android, arch: arm, target: android-arm, runs_on: ubuntu-22.04 }
+          - { platform: android, arch: arm64, target: android-arm64, runs_on: ubuntu-22.04 }
+          - { platform: android, arch: x64, target: android-x64, runs_on: ubuntu-22.04 }
+          - { platform: ios, arch: arm64, target: ios-arm64, runs_on: macos-latest }
+          # NodeMobile.xcframework has no x86_64 simulator slice on the 24.x
+          # line, so there is no ios-x64-simulator target.
+          - { platform: ios, arch: arm64, target: ios-arm64-simulator, runs_on: macos-latest, simulator: true }
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 20
-    name: better-sqlite3 node-${{ matrix.node_version }} (${{ matrix.target }})
-    outputs:
-      module_version: ${{ steps.parse-module-version.outputs.version }}
+    name: better-sqlite3 (${{ matrix.target }})
 
     steps:
       - uses: actions/checkout@v6
@@ -157,13 +87,8 @@ jobs:
           node-version: 24
 
       - name: Download npm package and unpack
-        run: npm pack ${{ env.MODULE_NAME }}@${{ inputs.module_version }} | xargs tar
-          -zxvf
-
-      - name: Parse module version
-        id: parse-module-version
-        working-directory: ./package
-        run: echo version=$(jq -r .version package.json) >> $GITHUB_OUTPUT
+        run: npm pack ${{ env.MODULE_NAME }}@${{ needs.resolve.outputs.module_version
+          }} | xargs tar -zxvf
 
       - name: Copy custom CMakeLists.txt
         run: cp ./CMakeLists.txt ./package/
@@ -188,7 +113,7 @@ jobs:
         run: |
           # Select which nodejs-mobile runtime cmake-napi links against. Requires
           # the NAPI_NODE_VERSION override added in digidem/cmake-napi-nodejs-mobile.
-          extra_args=(-D NAPI_NODE_VERSION=${{ matrix.node_version }})
+          extra_args=(-D NAPI_NODE_VERSION=${{ env.NODE_VERSION }})
           if [ "${{ matrix.platform }}" = "android" ]; then
             extra_args+=(-D CMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384")
             # RELR packed relocations (emitted by default when targeting
@@ -198,6 +123,13 @@ jobs:
             # support floor instead. Mirrors
             # digidem/nodejs-mobile-bare-prebuilds#9.
             extra_args+=(-D ANDROID_PLATFORM=android-24)
+          fi
+          if [ "${{ matrix.platform }}" = "ios" ]; then
+            # Build with Apple clang, not Homebrew LLVM: the latter's libc++
+            # headers carry no availability annotations, so the addon links
+            # symbols newer than the deployment target (e.g. std::__hash_memory
+            # from LLVM 21) and SIGSEGVs on older iOS.
+            extra_args+=(-D APPLE_CLANG=ON)
           fi
           if [ "${{ matrix.simulator }}" = "true" ]; then
             extra_args+=(--simulator)
@@ -225,62 +157,36 @@ jobs:
       - name: Upload prebuild artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
+          name: better-sqlite3-${{ needs.resolve.outputs.module_version }}-${{
+            matrix.target }}
           path: ./package/prebuilds/${{ matrix.target }}/*.node
 
   test-android:
     needs: [ resolve, build ]
-    strategy:
-      fail-fast: false
-      matrix:
-        node_version: ${{ fromJSON(needs.resolve.outputs.versions) }}
-    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-android.yml@v2
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-android.yml@v3
     with:
-      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
+      module_spec: better-sqlite3@${{ needs.resolve.outputs.module_version }}
       # The default 'smoke' runner (just `require(module)`) doesn't exercise
       # better-sqlite3's native binding — it's loaded lazily inside the
       # Database constructor. See test/smoke.js for details.
       test_runner: custom
       test_script: test/smoke.js
-      # Test against the nodejs-mobile runtime this prebuild was built for.
-      nodejs_mobile_version: v${{ matrix.node_version }}
-      # Override default artifact name (which assumes <module>-<version>-<target>)
-      # because we embed the node ABI; default target for android tests is android-x64.
-      # Inverted deliberately: in GitHub's `a && b || c`, an empty-string `b`
-      # is falsy and falls through to `c`, so the non-empty branch has to be
-      # the one guarded by the condition.
-      artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
-        needs.resolve.outputs.napi != 'true' &&
-        format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
-        || '' }}-android-x64
+      nodejs_mobile_version: v${{ needs.resolve.outputs.node_version }}
 
   test-ios:
     needs: [ resolve, build ]
-    strategy:
-      fail-fast: false
-      matrix:
-        node_version: ${{ fromJSON(needs.resolve.outputs.versions) }}
-    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-ios.yml@v2
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/test-ios.yml@v3
     with:
-      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
+      module_spec: better-sqlite3@${{ needs.resolve.outputs.module_version }}
       test_runner: custom
       test_script: test/smoke.js
-      nodejs_mobile_version: v${{ matrix.node_version }}
-      # Default test-ios target is ios-arm64 (runtime install path) but the
-      # artifact comes from the ios-arm64-simulator build.
-      # Inverted deliberately: in GitHub's `a && b || c`, an empty-string `b`
-      # is falsy and falls through to `c`, so the non-empty branch has to be
-      # the one guarded by the condition.
-      artifact_name: better-sqlite3-${{ needs.resolve.outputs.module_version }}${{
-        needs.resolve.outputs.napi != 'true' &&
-        format('-node-{0}', fromJSON(needs.resolve.outputs.abis)[matrix.node_version])
-        || '' }}-ios-arm64-simulator
+      nodejs_mobile_version: v${{ needs.resolve.outputs.node_version }}
 
   release:
     if: ${{ inputs.publish_release }}
-    needs: [ build, test-android, test-ios ]
+    needs: [ resolve, test-android, test-ios ]
     permissions:
       contents: write
-    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/release.yml@v2
+    uses: digidem/nodejs-mobile-bare-prebuilds/.github/workflows/release.yml@v3
     with:
-      module_spec: better-sqlite3@${{ needs.build.outputs.module_version }}
+      module_spec: better-sqlite3@${{ needs.resolve.outputs.module_version }}
